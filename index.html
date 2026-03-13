@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prompt Library</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-accent">&lt;/&gt;</span>
+        <span class="brand-title">Prompt Library</span>
+      </div>
+      <p class="app-subtitle">Save and manage your favorite prompts locally in your browser.</p>
+    </header>
+
+    <main class="app-main">
+      <section class="panel panel-form">
+        <h2 class="panel-title">New Prompt</h2>
+        <form id="prompt-form" class="prompt-form" autocomplete="off">
+          <div class="field-group">
+            <label for="prompt-title" class="field-label">Title</label>
+            <input
+              id="prompt-title"
+              name="title"
+              type="text"
+              class="field-input"
+              placeholder="e.g. Blog post outline, Code review helper"
+              required
+            />
+          </div>
+
+          <div class="field-group">
+            <label for="prompt-content" class="field-label">Prompt Content</label>
+            <textarea
+              id="prompt-content"
+              name="content"
+              class="field-input field-textarea"
+              rows="6"
+              placeholder="Write the full prompt here..."
+              required
+            ></textarea>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary">Save Prompt</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel panel-list">
+        <div class="panel-list-header">
+          <h2 class="panel-title">Saved Prompts</h2>
+          <span id="prompt-count" class="prompt-count">0 prompts</span>
+        </div>
+        <div id="prompt-list" class="prompt-list" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <footer class="app-footer">
+      <span class="muted">Stored securely in your browser using localStorage.</span>
+    </footer>
+  </div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
