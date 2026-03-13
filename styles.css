@@ -280,6 +280,34 @@ body {
   text-overflow: ellipsis;
 }
 
+.prompt-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 2px;
+  font-size: 0.88rem;
+}
+
+.rating-star {
+  border: none;
+  padding: 0 1px;
+  background: transparent;
+  cursor: pointer;
+  color: #d1d5db;
+  font-size: 1rem;
+  line-height: 1;
+  transition: color 0.16s ease, transform 0.12s ease;
+}
+
+.rating-star:hover {
+  color: #fbbf24;
+  transform: translateY(-1px) scale(1.02);
+}
+
+.rating-star-active {
+  color: #f59e0b;
+}
+
 .prompt-empty-state {
   padding: 18px 12px;
   text-align: center;

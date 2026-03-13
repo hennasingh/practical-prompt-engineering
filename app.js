@@ -1,5 +1,6 @@
 (function () {
   const STORAGE_KEY = "promptLibrary.items";
+  const RATINGS_STORAGE_KEY = "promptLibrary.ratings";
 
   const form = document.getElementById("prompt-form");
   const titleInput = document.getElementById("prompt-title");
@@ -9,6 +10,42 @@
 
   /** @type {{ id: string; title: string; content: string; createdAt: number; }[]} */
   let prompts = [];
+
+  function loadRatings() {
+    try {
+      const raw = window.localStorage.getItem(RATINGS_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch (err) {
+      console.error("Failed to load ratings from localStorage", err);
+      return {};
+    }
+  }
+
+  function saveRatings(ratings) {
+    try {
+      window.localStorage.setItem(RATINGS_STORAGE_KEY, JSON.stringify(ratings));
+    } catch (err) {
+      console.error("Failed to save ratings to localStorage", err);
+    }
+  }
+
+  function getRatingForPrompt(promptId) {
+    const ratings = loadRatings();
+    const value = ratings[promptId];
+    if (typeof value === "number" && value >= 1 && value <= 5) {
+      return value;
+    }
+    return 0;
+  }
+
+  function setRatingForPrompt(promptId, value) {
+    const rating = Math.max(1, Math.min(5, value));
+    const ratings = loadRatings();
+    ratings[promptId] = rating;
+    saveRatings(ratings);
+  }
 
   function loadPrompts() {
     try {
@@ -110,8 +147,30 @@
       preview.className = "prompt-preview";
       preview.textContent = getContentPreview(prompt.content);
 
+      const ratingWrapper = document.createElement("div");
+      ratingWrapper.className = "prompt-rating";
+      ratingWrapper.dataset.id = prompt.id;
+      ratingWrapper.setAttribute("role", "radiogroup");
+      ratingWrapper.setAttribute("aria-label", "Rate prompt effectiveness");
+
+      const currentRating = getRatingForPrompt(prompt.id);
+      for (let i = 1; i <= 5; i++) {
+        const star = document.createElement("button");
+        star.type = "button";
+        star.className =
+          "rating-star" + (i <= currentRating ? " rating-star-active" : "");
+        star.textContent = "★";
+        star.dataset.value = String(i);
+        star.dataset.action = "rate";
+        star.setAttribute("aria-label", `${i} star${i === 1 ? "" : "s"}`);
+        star.setAttribute("role", "radio");
+        star.setAttribute("aria-checked", i === currentRating ? "true" : "false");
+        ratingWrapper.appendChild(star);
+      }
+
       card.appendChild(header);
       card.appendChild(preview);
+      card.appendChild(ratingWrapper);
       card.appendChild(meta);
 
       promptList.appendChild(card);
@@ -158,6 +217,27 @@
 
     if (target.dataset.action === "delete" && target.dataset.id) {
       handleDelete(target.dataset.id);
+      return;
+    }
+
+    if (target.dataset.action === "rate" && target.dataset.value) {
+      const ratingContainer = target.closest(".prompt-rating");
+      if (!ratingContainer) return;
+      const promptId = ratingContainer.dataset.id;
+      if (!promptId) return;
+
+      const value = Number.parseInt(target.dataset.value, 10);
+      if (!Number.isFinite(value)) return;
+
+      setRatingForPrompt(promptId, value);
+
+      const stars = ratingContainer.querySelectorAll(".rating-star");
+      stars.forEach((starEl) => {
+        const starValue = Number.parseInt(starEl.dataset.value || "0", 10);
+        const isActive = Number.isFinite(starValue) && starValue <= value;
+        starEl.classList.toggle("rating-star-active", isActive);
+        starEl.setAttribute("aria-checked", isActive ? "true" : "false");
+      });
     }
   }
 
