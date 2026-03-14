@@ -1,6 +1,7 @@
 (function () {
   const STORAGE_KEY = "promptLibrary.items";
   const RATINGS_STORAGE_KEY = "promptLibrary.ratings";
+  const NOTES_STORAGE_KEY = "promptLibrary.notes";
 
   const form = document.getElementById("prompt-form");
   const titleInput = document.getElementById("prompt-title");
@@ -10,6 +11,58 @@
 
   /** @type {{ id: string; title: string; content: string; createdAt: number; }[]} */
   let prompts = [];
+
+  /** @type {{ [promptId: string]: { noteId: string; promptId: string; text: string; updatedAt: number; }[] }} */
+  let promptNotes = {};
+
+  let lastNotesError = "";
+
+  function loadNotes() {
+    try {
+      const raw = window.localStorage.getItem(NOTES_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return {};
+      const safe = {};
+      for (const [promptId, notes] of Object.entries(parsed)) {
+        if (!Array.isArray(notes)) continue;
+        safe[promptId] = notes
+          .filter(
+            (note) =>
+              note &&
+              typeof note.noteId === "string" &&
+              typeof note.promptId === "string" &&
+              typeof note.text === "string"
+          )
+          .map((note) => ({
+            noteId: note.noteId,
+            promptId: note.promptId,
+            text: note.text,
+            updatedAt:
+              typeof note.updatedAt === "number" && Number.isFinite(note.updatedAt)
+                ? note.updatedAt
+                : Date.now(),
+          }));
+      }
+      return safe;
+    } catch (err) {
+      console.error("Failed to load notes from localStorage", err);
+      lastNotesError = "Unable to load notes. Storage not available.";
+      return {};
+    }
+  }
+
+  function persistNotes() {
+    try {
+      window.localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(promptNotes));
+      lastNotesError = "";
+      return true;
+    } catch (err) {
+      console.error("Failed to save notes to localStorage", err);
+      lastNotesError = "Unable to save notes. Storage not available.";
+      return false;
+    }
+  }
 
   function loadRatings() {
     try {
@@ -168,9 +221,82 @@
         ratingWrapper.appendChild(star);
       }
 
+      const notesSection = document.createElement("section");
+      notesSection.className = "prompt-notes";
+      notesSection.dataset.promptId = prompt.id;
+
+      const notesHeader = document.createElement("div");
+      notesHeader.className = "prompt-notes-header";
+
+      const notesTitle = document.createElement("h4");
+      notesTitle.className = "prompt-notes-title";
+      notesTitle.textContent = "Notes";
+
+      const addNoteBtn = document.createElement("button");
+      addNoteBtn.type = "button";
+      addNoteBtn.className = "btn btn-ghost btn-note-add";
+      addNoteBtn.textContent = "Add Note";
+      addNoteBtn.dataset.action = "note-add";
+      addNoteBtn.dataset.promptId = prompt.id;
+
+      notesHeader.appendChild(notesTitle);
+      notesHeader.appendChild(addNoteBtn);
+
+      const notesList = document.createElement("ul");
+      notesList.className = "prompt-notes-list";
+      notesList.dataset.promptId = prompt.id;
+
+      const notes = promptNotes[prompt.id] || [];
+      notes.forEach((note) => {
+        const item = document.createElement("li");
+        item.className = "prompt-note";
+        item.dataset.noteId = note.noteId;
+        item.dataset.promptId = note.promptId;
+
+        const text = document.createElement("p");
+        text.className = "prompt-note-text";
+        text.textContent = note.text;
+
+        const actions = document.createElement("div");
+        actions.className = "prompt-note-actions";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "btn btn-ghost btn-note-edit";
+        editBtn.textContent = "Edit";
+        editBtn.dataset.action = "note-edit";
+        editBtn.dataset.noteId = note.noteId;
+        editBtn.dataset.promptId = note.promptId;
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "btn btn-ghost btn-danger btn-note-delete";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.dataset.action = "note-delete";
+        deleteBtn.dataset.noteId = note.noteId;
+        deleteBtn.dataset.promptId = note.promptId;
+
+        actions.appendChild(editBtn);
+        actions.appendChild(deleteBtn);
+
+        item.appendChild(text);
+        item.appendChild(actions);
+        notesList.appendChild(item);
+      });
+
+      const notesError = document.createElement("div");
+      notesError.className = "prompt-notes-error";
+      notesError.textContent = lastNotesError;
+      notesError.hidden = !lastNotesError;
+
+      notesSection.appendChild(notesHeader);
+      notesSection.appendChild(notesList);
+      notesSection.appendChild(notesError);
+
       card.appendChild(header);
       card.appendChild(preview);
       card.appendChild(ratingWrapper);
+      card.appendChild(notesSection);
       card.appendChild(meta);
 
       promptList.appendChild(card);
@@ -238,11 +364,242 @@
         starEl.classList.toggle("rating-star-active", isActive);
         starEl.setAttribute("aria-checked", isActive ? "true" : "false");
       });
+      return;
+    }
+
+    if (target.dataset.action === "note-add" && target.dataset.promptId) {
+      const promptId = target.dataset.promptId;
+      const notesList = promptList.querySelector(
+        `.prompt-notes-list[data-prompt-id="${CSS.escape(promptId)}"]`
+      );
+      if (!notesList) return;
+
+      const existingEditor = notesList.querySelector(".prompt-note-editor");
+      if (existingEditor) {
+        const textarea = existingEditor.querySelector("textarea");
+        if (textarea) textarea.focus();
+        return;
+      }
+
+      const editorItem = document.createElement("li");
+      editorItem.className = "prompt-note prompt-note-editor";
+      editorItem.dataset.promptId = promptId;
+      editorItem.dataset.mode = "new";
+
+      const textarea = document.createElement("textarea");
+      textarea.className = "field-input prompt-note-input";
+      textarea.rows = 3;
+      textarea.placeholder = "Write a note...";
+
+      const actions = document.createElement("div");
+      actions.className = "prompt-note-actions";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "btn btn-primary btn-note-save";
+      saveBtn.textContent = "Save";
+      saveBtn.dataset.action = "note-save";
+      saveBtn.dataset.promptId = promptId;
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn btn-ghost btn-note-cancel";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.dataset.action = "note-cancel";
+
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+
+      editorItem.appendChild(textarea);
+      editorItem.appendChild(actions);
+
+      notesList.insertBefore(editorItem, notesList.firstChild);
+      textarea.focus();
+      return;
+    }
+
+    if (target.dataset.action === "note-cancel") {
+      const editor = target.closest(".prompt-note-editor");
+      if (!editor) return;
+
+      const mode = editor.dataset.mode;
+      if (mode === "edit") {
+        const promptId = editor.dataset.promptId;
+        const noteId = editor.dataset.noteId;
+        if (!promptId || !noteId) {
+          editor.remove();
+          return;
+        }
+
+        const notes = promptNotes[promptId] || [];
+        const note = notes.find((n) => n.noteId === noteId);
+        const notesList = editor.parentElement;
+        if (!note || !notesList) {
+          editor.remove();
+          return;
+        }
+
+        const item = document.createElement("li");
+        item.className = "prompt-note";
+        item.dataset.noteId = note.noteId;
+        item.dataset.promptId = note.promptId;
+
+        const text = document.createElement("p");
+        text.className = "prompt-note-text";
+        text.textContent = note.text;
+
+        const actions = document.createElement("div");
+        actions.className = "prompt-note-actions";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "btn btn-ghost btn-note-edit";
+        editBtn.textContent = "Edit";
+        editBtn.dataset.action = "note-edit";
+        editBtn.dataset.noteId = note.noteId;
+        editBtn.dataset.promptId = note.promptId;
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.className = "btn btn-ghost btn-danger btn-note-delete";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.dataset.action = "note-delete";
+        deleteBtn.dataset.noteId = note.noteId;
+        deleteBtn.dataset.promptId = note.promptId;
+
+        actions.appendChild(editBtn);
+        actions.appendChild(deleteBtn);
+
+        item.appendChild(text);
+        item.appendChild(actions);
+
+        notesList.replaceChild(item, editor);
+      } else {
+        editor.remove();
+      }
+      return;
+    }
+
+    if (target.dataset.action === "note-save" && target.dataset.promptId) {
+      const editor = target.closest(".prompt-note-editor");
+      if (!editor) return;
+
+      const textarea = editor.querySelector("textarea");
+      if (!(textarea instanceof HTMLTextAreaElement)) return;
+
+      const textValue = textarea.value.trim();
+      if (!textValue) {
+        editor.remove();
+        return;
+      }
+
+      const promptId = target.dataset.promptId;
+      const mode = editor.dataset.mode;
+      const noteId = editor.dataset.noteId;
+
+      const existing = promptNotes[promptId] || [];
+
+      if (mode === "edit" && noteId) {
+        const updated = existing.map((note) =>
+          note.noteId === noteId
+            ? { ...note, text: textValue, updatedAt: Date.now() }
+            : note
+        );
+        promptNotes[promptId] = updated;
+      } else {
+        const newNote = {
+          noteId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          promptId,
+          text: textValue,
+          updatedAt: Date.now(),
+        };
+        promptNotes[promptId] = [newNote, ...existing];
+      }
+
+      if (persistNotes()) {
+        renderPrompts();
+      }
+      return;
+    }
+
+    if (target.dataset.action === "note-edit" && target.dataset.promptId && target.dataset.noteId) {
+      const promptId = target.dataset.promptId;
+      const noteId = target.dataset.noteId;
+      const notesList = promptList.querySelector(
+        `.prompt-notes-list[data-prompt-id="${CSS.escape(promptId)}"]`
+      );
+      if (!notesList) return;
+
+      const existingEditor = notesList.querySelector(".prompt-note-editor");
+      if (existingEditor) {
+        const textarea = existingEditor.querySelector("textarea");
+        if (textarea) textarea.focus();
+        return;
+      }
+
+      const notes = promptNotes[promptId] || [];
+      const note = notes.find((n) => n.noteId === noteId);
+      if (!note) return;
+
+      const originalItem = notesList.querySelector(
+        `.prompt-note[data-note-id="${CSS.escape(noteId)}"]`
+      );
+      if (!originalItem) return;
+
+      const editorItem = document.createElement("li");
+      editorItem.className = "prompt-note prompt-note-editor";
+      editorItem.dataset.promptId = promptId;
+      editorItem.dataset.noteId = noteId;
+      editorItem.dataset.mode = "edit";
+
+      const textarea = document.createElement("textarea");
+      textarea.className = "field-input prompt-note-input";
+      textarea.rows = 3;
+      textarea.value = note.text;
+
+      const actions = document.createElement("div");
+      actions.className = "prompt-note-actions";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "btn btn-primary btn-note-save";
+      saveBtn.textContent = "Save";
+      saveBtn.dataset.action = "note-save";
+      saveBtn.dataset.promptId = promptId;
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "btn btn-ghost btn-note-cancel";
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.dataset.action = "note-cancel";
+
+      actions.appendChild(saveBtn);
+      actions.appendChild(cancelBtn);
+
+      editorItem.appendChild(textarea);
+      editorItem.appendChild(actions);
+
+      notesList.replaceChild(editorItem, originalItem);
+      textarea.focus();
+      return;
+    }
+
+    if (target.dataset.action === "note-delete" && target.dataset.promptId && target.dataset.noteId) {
+      const promptId = target.dataset.promptId;
+      const noteId = target.dataset.noteId;
+      const existing = promptNotes[promptId] || [];
+      const next = existing.filter((note) => note.noteId !== noteId);
+      promptNotes[promptId] = next;
+      if (persistNotes()) {
+        renderPrompts();
+      }
+      return;
     }
   }
 
   function init() {
     prompts = loadPrompts();
+    promptNotes = loadNotes();
     renderPrompts();
 
     form.addEventListener("submit", handleFormSubmit);

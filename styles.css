@@ -322,6 +322,77 @@ body {
   font-weight: 600;
 }
 
+.prompt-notes {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--bg-surface-alt);
+}
+
+.prompt-notes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.prompt-notes-title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.btn-note-add {
+  padding: 3px 8px;
+  font-size: 0.76rem;
+}
+
+.prompt-notes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prompt-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.5);
+}
+
+.prompt-note-text {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text-main);
+}
+
+.prompt-note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.prompt-note-input {
+  font-size: 0.8rem;
+}
+
+.prompt-notes-error {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
 .app-footer {
   display: flex;
   justify-content: flex-end;
