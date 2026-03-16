@@ -3,11 +3,18 @@
   const RATINGS_STORAGE_KEY = "promptLibrary.ratings";
   const NOTES_STORAGE_KEY = "promptLibrary.notes";
 
+  const EXPORT_VERSION = 1;
+  const EXPORT_FILE_PREFIX = "prompt-library-export";
+
   const form = document.getElementById("prompt-form");
   const titleInput = document.getElementById("prompt-title");
+  const modelInput = document.getElementById("prompt-model");
   const contentInput = document.getElementById("prompt-content");
   const promptList = document.getElementById("prompt-list");
   const promptCount = document.getElementById("prompt-count");
+  const exportButton = document.getElementById("export-prompts");
+  const importButton = document.getElementById("import-prompts");
+  const importFileInput = document.getElementById("import-file-input");
 
   /** @type {{ id: string; title: string; content: string; createdAt: number; }[]} */
   let prompts = [];
@@ -16,6 +23,227 @@
   let promptNotes = {};
 
   let lastNotesError = "";
+
+  /**
+   * @typedef {"high" | "medium" | "low"} TokenConfidence
+   * @typedef {{ min: number; max: number; confidence: TokenConfidence }} TokenEstimate
+   * @typedef {{ model: string; createdAt: string; updatedAt: string; tokenEstimate: TokenEstimate }} PromptMetadata
+   */
+
+  function isValidIsoDate(value) {
+    if (typeof value !== "string") return false;
+    try {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) return false;
+      return parsed.toISOString() === value;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
+   * @param {string} text
+   * @param {boolean} isCode
+   * @returns {TokenEstimate}
+   */
+  function estimateTokens(text, isCode) {
+    if (typeof text !== "string") {
+      throw new Error("estimateTokens: text must be a string");
+    }
+
+    const normalized = text.trim();
+    const words = normalized ? normalized.split(/\s+/g) : [];
+    const wordCount = words.length;
+    const charCount = normalized.length;
+
+    let min = 0.75 * wordCount;
+    let max = 0.25 * charCount;
+
+    if (isCode) {
+      min *= 1.3;
+      max *= 1.3;
+    }
+
+    const minRounded = Math.max(0, Math.round(min));
+    const maxRounded = Math.max(minRounded, Math.round(max));
+
+    let confidence;
+    if (maxRounded < 1000) {
+      confidence = "high";
+    } else if (maxRounded <= 5000) {
+      confidence = "medium";
+    } else {
+      confidence = "low";
+    }
+
+    return {
+      min: minRounded,
+      max: maxRounded,
+      confidence,
+    };
+  }
+
+  /**
+   * @param {string} modelName
+   * @param {string} content
+   * @returns {PromptMetadata}
+   */
+  function trackModel(modelName, content) {
+    if (typeof modelName !== "string") {
+      throw new Error("Model name must be a string.");
+    }
+    const trimmedModel = modelName.trim();
+    if (!trimmedModel) {
+      throw new Error("Model name must not be empty.");
+    }
+    if (trimmedModel.length > 100) {
+      throw new Error("Model name must be 100 characters or fewer.");
+    }
+
+    const createdAt = new Date().toISOString();
+    const tokenEstimate = estimateTokens(content || "", false);
+
+    return {
+      model: trimmedModel,
+      createdAt,
+      updatedAt: createdAt,
+      tokenEstimate,
+    };
+  }
+
+  /**
+   * @param {PromptMetadata} metadata
+   * @returns {PromptMetadata}
+   */
+  function updateTimestamps(metadata) {
+    if (!metadata || typeof metadata !== "object") {
+      throw new Error("updateTimestamps: metadata must be an object.");
+    }
+    if (!isValidIsoDate(metadata.createdAt)) {
+      throw new Error("createdAt must be a valid ISO 8601 string.");
+    }
+
+    const createdAtDate = new Date(metadata.createdAt);
+    const updatedAt = new Date().toISOString();
+    const updatedAtDate = new Date(updatedAt);
+
+    if (updatedAtDate.getTime() < createdAtDate.getTime()) {
+      throw new Error("updatedAt must be greater than or equal to createdAt.");
+    }
+
+    return {
+      ...metadata,
+      updatedAt,
+    };
+  }
+
+  function formatDateTime(date) {
+    return date.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function getPromptCreatedAtMs(prompt) {
+    if (prompt && prompt.metadata && isValidIsoDate(prompt.metadata.createdAt)) {
+      const parsed = Date.parse(prompt.metadata.createdAt);
+      if (!Number.isNaN(parsed)) return parsed;
+    }
+
+    if (typeof prompt.createdAt === "number" && Number.isFinite(prompt.createdAt)) {
+      return prompt.createdAt;
+    }
+
+    if (typeof prompt.id === "string") {
+      const numericPrefix = Number.parseInt(prompt.id.split("-")[0], 10);
+      if (Number.isFinite(numericPrefix)) return numericPrefix;
+    }
+
+    return 0;
+  }
+
+  function ensurePromptMetadata(prompt) {
+    if (prompt.metadata && typeof prompt.metadata === "object") {
+      const existing = prompt.metadata;
+      if (typeof existing.model === "string" && isValidIsoDate(existing.createdAt) && isValidIsoDate(existing.updatedAt) && existing.tokenEstimate && typeof existing.tokenEstimate.min === "number" && typeof existing.tokenEstimate.max === "number") {
+        return prompt;
+      }
+    }
+
+    const baseCreated =
+      typeof prompt.createdAt === "number" && Number.isFinite(prompt.createdAt)
+        ? new Date(prompt.createdAt)
+        : new Date();
+
+    let metadata;
+    try {
+      metadata = trackModel("Unknown model", prompt.content || "");
+    } catch (err) {
+      metadata = {
+        model: "Unknown model",
+        createdAt: baseCreated.toISOString(),
+        updatedAt: baseCreated.toISOString(),
+        tokenEstimate: estimateTokens(prompt.content || "", false),
+      };
+    }
+
+    metadata.createdAt = baseCreated.toISOString();
+    metadata.updatedAt = metadata.createdAt;
+
+    return {
+      ...prompt,
+      createdAt: baseCreated.getTime(),
+      metadata,
+    };
+  }
+
+  function computeExportStats(allPrompts, ratings) {
+    const totalPrompts = Array.isArray(allPrompts) ? allPrompts.length : 0;
+
+    const ratingValues = ratings && typeof ratings === "object"
+      ? Object.values(ratings).filter((value) =>
+          typeof value === "number" && Number.isFinite(value) && value >= 1 && value <= 5
+        )
+      : [];
+
+    const averageRating = ratingValues.length
+      ? ratingValues.reduce((sum, value) => sum + value, 0) / ratingValues.length
+      : 0;
+
+    const roundedAverageRating = Number.isFinite(averageRating)
+      ? Math.round(averageRating * 100) / 100
+      : 0;
+
+    const modelCounts = {};
+    for (const prompt of allPrompts || []) {
+      if (!prompt) continue;
+      let modelName =
+        prompt.metadata && typeof prompt.metadata.model === "string"
+          ? prompt.metadata.model.trim()
+          : "Unknown";
+      if (!modelName) modelName = "Unknown";
+      modelCounts[modelName] = (modelCounts[modelName] || 0) + 1;
+    }
+
+    let mostUsedModel = null;
+    let highestCount = 0;
+    for (const [modelName, count] of Object.entries(modelCounts)) {
+      if (count > highestCount) {
+        highestCount = count;
+        mostUsedModel = modelName;
+      }
+    }
+
+    return {
+      totalPrompts,
+      averageRating: roundedAverageRating,
+      mostUsedModel,
+      ratingsCount: ratingValues.length,
+    };
+  }
 
   function loadNotes() {
     try {
@@ -84,6 +312,58 @@
     }
   }
 
+  function buildExportPayload() {
+    const currentPrompts = Array.isArray(prompts)
+      ? prompts.map((prompt) => ensurePromptMetadata(prompt))
+      : [];
+
+    const ratings = loadRatings();
+    const notesSnapshot = loadNotes();
+    const exportedAt = new Date().toISOString();
+    const stats = computeExportStats(currentPrompts, ratings);
+
+    return {
+      version: EXPORT_VERSION,
+      exportedAt,
+      stats,
+      data: {
+        prompts: currentPrompts,
+        ratings,
+        notes: notesSnapshot,
+      },
+    };
+  }
+
+  function triggerExportDownload() {
+    try {
+      const payload = buildExportPayload();
+      const json = JSON.stringify(payload, null, 2);
+      const blob = new Blob([json], { type: "application/json" });
+
+      const timestampForFilename = new Date()
+        .toISOString()
+        .replace(/[:.]/g, "-");
+      const filename = `${EXPORT_FILE_PREFIX}-${timestampForFilename}.json`;
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export prompts", err);
+      const message =
+        err instanceof Error
+          ? err.message
+          : "An unexpected error occurred while exporting prompts.";
+      window.alert(`Export failed. Details: ${message}`);
+    }
+  }
+
   function getRatingForPrompt(promptId) {
     const ratings = loadRatings();
     const value = ratings[promptId];
@@ -98,6 +378,81 @@
     const ratings = loadRatings();
     ratings[promptId] = rating;
     saveRatings(ratings);
+  }
+
+  function validateImportedStructure(parsed) {
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Imported file is not a valid JSON object.");
+    }
+
+    const version = parsed.version;
+    if (version !== EXPORT_VERSION) {
+      throw new Error(
+        typeof version === "number"
+          ? `Unsupported export version ${version}. Expected version ${EXPORT_VERSION}.`
+          : "Missing or invalid export version."
+      );
+    }
+
+    if (!parsed.data || typeof parsed.data !== "object") {
+      throw new Error("Missing data section in imported file.");
+    }
+
+    const data = parsed.data;
+    const importedPrompts = Array.isArray(data.prompts) ? data.prompts : [];
+    const importedRatings = data.ratings && typeof data.ratings === "object" ? data.ratings : {};
+    const importedNotes = data.notes && typeof data.notes === "object" ? data.notes : {};
+
+    const safePrompts = importedPrompts
+      .filter(
+        (item) =>
+          item &&
+          typeof item.id === "string" &&
+          typeof item.title === "string" &&
+          typeof item.content === "string"
+      )
+      .map((item) => ensurePromptMetadata(item));
+
+    const safeRatings = {};
+    for (const [promptId, value] of Object.entries(importedRatings)) {
+      if (
+        typeof promptId === "string" &&
+        typeof value === "number" &&
+        Number.isFinite(value) &&
+        value >= 1 &&
+        value <= 5
+      ) {
+        safeRatings[promptId] = value;
+      }
+    }
+
+    const safeNotes = {};
+    for (const [promptId, notes] of Object.entries(importedNotes)) {
+      if (!Array.isArray(notes)) continue;
+      const normalized = notes
+        .filter((note) => note && typeof note.text === "string")
+        .map((note) => ({
+          noteId:
+            typeof note.noteId === "string"
+              ? note.noteId
+              : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          promptId: String(promptId),
+          text: note.text,
+          updatedAt:
+            typeof note.updatedAt === "number" && Number.isFinite(note.updatedAt)
+              ? note.updatedAt
+              : Date.now(),
+        }));
+      if (normalized.length) {
+        safeNotes[promptId] = normalized;
+      }
+    }
+
+    return {
+      prompts: safePrompts,
+      ratings: safeRatings,
+      notes: safeNotes,
+    };
   }
 
   function loadPrompts() {
@@ -161,9 +516,13 @@
       return;
     }
 
-    promptCount.textContent = formatCountLabel(prompts.length);
+    const sortedPrompts = [...prompts].sort((a, b) => {
+      return getPromptCreatedAtMs(b) - getPromptCreatedAtMs(a);
+    });
 
-    prompts.forEach((prompt) => {
+    promptCount.textContent = formatCountLabel(sortedPrompts.length);
+
+    sortedPrompts.forEach((prompt) => {
       const card = document.createElement("article");
       card.className = "prompt-card";
       card.dataset.id = prompt.id;
@@ -178,12 +537,81 @@
 
       const meta = document.createElement("div");
       meta.className = "prompt-meta";
-      const date = new Date(prompt.createdAt || Date.now());
-      meta.textContent = date.toLocaleDateString(undefined, {
-        year: "numeric",
-        month: "short",
-        day: "2-digit",
-      });
+
+      const metaLeft = document.createElement("div");
+      metaLeft.className = "prompt-meta-left";
+
+      const metaRight = document.createElement("div");
+      metaRight.className = "prompt-meta-right";
+
+      const metadata = prompt.metadata && typeof prompt.metadata === "object" ? prompt.metadata : null;
+
+      const modelRow = document.createElement("div");
+      modelRow.className = "prompt-model-row";
+
+      const modelLabel = document.createElement("span");
+      modelLabel.className = "prompt-model-label";
+      modelLabel.textContent = "Model";
+
+      const modelNameEl = document.createElement("span");
+      modelNameEl.className = "prompt-model-name";
+      modelNameEl.textContent = metadata && typeof metadata.model === "string" && metadata.model.trim()
+        ? metadata.model
+        : "Unknown";
+
+      modelRow.appendChild(modelLabel);
+      modelRow.appendChild(modelNameEl);
+
+      const createdBase = metadata && isValidIsoDate(metadata.createdAt)
+        ? new Date(metadata.createdAt)
+        : new Date(prompt.createdAt || Date.now());
+      const updatedBase = metadata && isValidIsoDate(metadata.updatedAt)
+        ? new Date(metadata.updatedAt)
+        : createdBase;
+
+      const timestampsEl = document.createElement("div");
+      timestampsEl.className = "prompt-timestamps";
+      timestampsEl.textContent = `Created ${formatDateTime(createdBase)} · Updated ${formatDateTime(updatedBase)}`;
+
+      metaLeft.appendChild(modelRow);
+      metaLeft.appendChild(timestampsEl);
+
+      const tokenRow = document.createElement("div");
+      tokenRow.className = "prompt-token-row";
+
+      const tokenRangeEl = document.createElement("span");
+      tokenRangeEl.className = "token-range";
+
+      const tokenBadge = document.createElement("span");
+      tokenBadge.className = "token-confidence-badge";
+
+      if (metadata && metadata.tokenEstimate) {
+        const estimate = metadata.tokenEstimate;
+        tokenRangeEl.textContent = `Tokens: ~${estimate.min}–${estimate.max}`;
+
+        if (estimate.confidence === "high") {
+          tokenBadge.classList.add("token-confidence-high");
+          tokenBadge.textContent = "High confidence";
+        } else if (estimate.confidence === "medium") {
+          tokenBadge.classList.add("token-confidence-medium");
+          tokenBadge.textContent = "Medium confidence";
+        } else {
+          tokenBadge.classList.add("token-confidence-low");
+          tokenBadge.textContent = "Low confidence";
+        }
+      } else {
+        tokenRangeEl.textContent = "Tokens: n/a";
+        tokenBadge.classList.add("token-confidence-medium");
+        tokenBadge.textContent = "Estimate unavailable";
+      }
+
+      tokenRow.appendChild(tokenRangeEl);
+      tokenRow.appendChild(tokenBadge);
+
+      metaRight.appendChild(tokenRow);
+
+      meta.appendChild(metaLeft);
+      meta.appendChild(metaRight);
 
       const deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
@@ -315,10 +743,21 @@
     event.preventDefault();
 
     const title = titleInput.value.trim();
+    const modelName = modelInput.value.trim();
     const content = contentInput.value.trim();
 
-    if (!title || !content) {
+    if (!title || !content || !modelName) {
       // Basic guard; browser required attribute also helps
+      return;
+    }
+
+    let metadata;
+    try {
+      metadata = trackModel(modelName, content);
+    } catch (err) {
+      console.error("Failed to create prompt metadata", err);
+      const message = err instanceof Error ? err.message : "Unable to save prompt metadata.";
+      window.alert(message);
       return;
     }
 
@@ -327,6 +766,7 @@
       title,
       content,
       createdAt: Date.now(),
+      metadata,
     };
 
     prompts.unshift(prompt);
@@ -356,14 +796,17 @@
       if (!Number.isFinite(value)) return;
 
       setRatingForPrompt(promptId, value);
+      const prompt = prompts.find((p) => p.id === promptId);
+      if (prompt && prompt.metadata) {
+        try {
+          prompt.metadata = updateTimestamps(prompt.metadata);
+          persistPrompts();
+        } catch (err) {
+          console.error("Failed to update metadata timestamp after rating", err);
+        }
+      }
 
-      const stars = ratingContainer.querySelectorAll(".rating-star");
-      stars.forEach((starEl) => {
-        const starValue = Number.parseInt(starEl.dataset.value || "0", 10);
-        const isActive = Number.isFinite(starValue) && starValue <= value;
-        starEl.classList.toggle("rating-star-active", isActive);
-        starEl.setAttribute("aria-checked", isActive ? "true" : "false");
-      });
+      renderPrompts();
       return;
     }
 
@@ -517,6 +960,16 @@
       }
 
       if (persistNotes()) {
+        const prompt = prompts.find((p) => p.id === promptId);
+        if (prompt && prompt.metadata) {
+          try {
+            prompt.metadata = updateTimestamps(prompt.metadata);
+            persistPrompts();
+          } catch (err) {
+            console.error("Failed to update metadata timestamp after saving note", err);
+          }
+        }
+
         renderPrompts();
       }
       return;
@@ -591,19 +1044,219 @@
       const next = existing.filter((note) => note.noteId !== noteId);
       promptNotes[promptId] = next;
       if (persistNotes()) {
+        const prompt = prompts.find((p) => p.id === promptId);
+        if (prompt && prompt.metadata) {
+          try {
+            prompt.metadata = updateTimestamps(prompt.metadata);
+            persistPrompts();
+          } catch (err) {
+            console.error("Failed to update metadata timestamp after deleting note", err);
+          }
+        }
+
         renderPrompts();
       }
       return;
     }
   }
 
+  function importDataIntoLibrary(imported) {
+    const validated = validateImportedStructure(imported);
+    const importedPrompts = validated.prompts;
+    const importedRatings = validated.ratings;
+    const importedNotes = validated.notes;
+
+    const existingPrompts = Array.isArray(prompts) ? prompts : [];
+
+    let importMode = "replace";
+    if (existingPrompts.length && importedPrompts.length) {
+      const merge = window.confirm(
+        "How should imported prompts be applied?\n\n" +
+          "Click OK to MERGE with existing prompts.\n" +
+          "Click Cancel to REPLACE all existing prompts with imported ones."
+      );
+      importMode = merge ? "merge" : "replace";
+    }
+
+    const existingById = new Map(existingPrompts.map((p) => [p.id, p]));
+    const duplicateIds = importedPrompts
+      .map((p) => p.id)
+      .filter((id) => typeof id === "string" && existingById.has(id));
+
+    let overwriteDuplicates = true;
+    if (importMode === "merge" && duplicateIds.length) {
+      overwriteDuplicates = window.confirm(
+        `Found ${duplicateIds.length} prompts with duplicate IDs.\n\n` +
+          "Click OK to overwrite existing prompts with imported ones.\n" +
+          "Click Cancel to keep existing prompts and skip duplicates from the import."
+      );
+    }
+
+    const backupPrompts = existingPrompts.map((p) => ({ ...p }));
+    const backupNotes = JSON.parse(JSON.stringify(promptNotes || {}));
+    const backupRatings = loadRatings();
+
+    try {
+      let nextPrompts;
+      if (importMode === "replace") {
+        nextPrompts = importedPrompts;
+      } else {
+        const byId = new Map(existingPrompts.map((p) => [p.id, p]));
+        for (const prompt of importedPrompts) {
+          if (!prompt || typeof prompt.id !== "string") continue;
+          if (byId.has(prompt.id)) {
+            if (overwriteDuplicates) {
+              byId.set(prompt.id, prompt);
+            }
+          } else {
+            byId.set(prompt.id, prompt);
+          }
+        }
+        nextPrompts = Array.from(byId.values()).map((p) => ensurePromptMetadata(p));
+      }
+
+      const allowedPromptIds = new Set(nextPrompts.map((p) => p.id));
+
+      let nextRatings = {};
+      if (importMode === "replace") {
+        for (const [promptId, value] of Object.entries(importedRatings)) {
+          if (allowedPromptIds.has(promptId)) {
+            nextRatings[promptId] = value;
+          }
+        }
+      } else {
+        const currentRatings = loadRatings();
+        nextRatings = { ...currentRatings };
+        for (const [promptId, value] of Object.entries(importedRatings)) {
+          if (!allowedPromptIds.has(promptId)) continue;
+          if (duplicateIds.includes(promptId)) {
+            if (overwriteDuplicates) {
+              nextRatings[promptId] = value;
+            } else if (!(promptId in nextRatings)) {
+              nextRatings[promptId] = value;
+            }
+          } else {
+            nextRatings[promptId] = value;
+          }
+        }
+      }
+
+      let nextNotes = {};
+      if (importMode === "replace") {
+        for (const [promptId, notes] of Object.entries(importedNotes)) {
+          if (!allowedPromptIds.has(promptId) || !Array.isArray(notes)) continue;
+          nextNotes[promptId] = notes.slice();
+        }
+      } else {
+        const existingNotes = promptNotes || {};
+        nextNotes = { ...existingNotes };
+        for (const [promptId, notes] of Object.entries(importedNotes)) {
+          if (!allowedPromptIds.has(promptId) || !Array.isArray(notes)) continue;
+          const currentForPrompt = Array.isArray(existingNotes[promptId])
+            ? existingNotes[promptId]
+            : [];
+          const byNoteId = new Map(currentForPrompt.map((note) => [note.noteId, note]));
+          for (const note of notes) {
+            if (!note || typeof note.noteId !== "string") continue;
+            if (byNoteId.has(note.noteId)) {
+              if (overwriteDuplicates) {
+                byNoteId.set(note.noteId, note);
+              }
+            } else {
+              byNoteId.set(note.noteId, note);
+            }
+          }
+          nextNotes[promptId] = Array.from(byNoteId.values());
+        }
+      }
+
+      prompts = nextPrompts;
+      promptNotes = nextNotes;
+
+      saveRatings(nextRatings);
+      persistPrompts();
+      const notesSaved = persistNotes();
+      if (!notesSaved) {
+        throw new Error("Failed to save notes to localStorage during import.");
+      }
+
+      renderPrompts();
+      window.alert("Import completed successfully.");
+    } catch (err) {
+      console.error("Import failed; rolling back to previous data.", err);
+
+      prompts = backupPrompts;
+      promptNotes = backupNotes;
+      saveRatings(backupRatings);
+      persistPrompts();
+      persistNotes();
+
+      const message =
+        err instanceof Error
+          ? err.message
+          : "An unexpected error occurred while importing prompts.";
+      window.alert(
+        "Import failed and your existing data was restored.\n\nDetails: " + message
+      );
+    }
+  }
+
+  function handleImportFileChange(event) {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || !input.files || !input.files[0]) {
+      return;
+    }
+
+    const file = input.files[0];
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      try {
+        const text = typeof reader.result === "string" ? reader.result : "";
+        const parsed = JSON.parse(text);
+        importDataIntoLibrary(parsed);
+      } catch (err) {
+        console.error("Failed to read or parse imported file", err);
+        const message =
+          err instanceof Error
+            ? err.message
+            : "The selected file is not a valid export JSON.";
+        window.alert("Import failed. Details: " + message);
+      } finally {
+        input.value = "";
+      }
+    };
+
+    reader.onerror = () => {
+      console.error("FileReader error while importing prompts", reader.error);
+      window.alert("Unable to read the selected file. Please try again.");
+      input.value = "";
+    };
+
+    reader.readAsText(file);
+  }
+
   function init() {
-    prompts = loadPrompts();
+    prompts = loadPrompts().map((prompt) => ensurePromptMetadata(prompt));
+    try {
+      persistPrompts();
+    } catch (err) {
+      console.error("Failed to persist upgraded prompts with metadata", err);
+    }
     promptNotes = loadNotes();
     renderPrompts();
 
     form.addEventListener("submit", handleFormSubmit);
     promptList.addEventListener("click", handleListClick);
+    if (exportButton) {
+      exportButton.addEventListener("click", triggerExportDownload);
+    }
+    if (importButton && importFileInput) {
+      importButton.addEventListener("click", () => {
+        importFileInput.click();
+      });
+      importFileInput.addEventListener("change", handleImportFileChange);
+    }
   }
 
   if (document.readyState === "loading") {

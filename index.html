@@ -33,6 +33,19 @@
           </div>
 
           <div class="field-group">
+            <label for="prompt-model" class="field-label">Model</label>
+            <input
+              id="prompt-model"
+              name="model"
+              type="text"
+              class="field-input"
+              placeholder="e.g. gpt-4.1, gpt-o1, custom"
+              maxlength="100"
+              required
+            />
+          </div>
+
+          <div class="field-group">
             <label for="prompt-content" class="field-label">Prompt Content</label>
             <textarea
               id="prompt-content"
@@ -52,8 +65,15 @@
 
       <section class="panel panel-list">
         <div class="panel-list-header">
-          <h2 class="panel-title">Saved Prompts</h2>
-          <span id="prompt-count" class="prompt-count">0 prompts</span>
+          <div class="panel-list-header-left">
+            <h2 class="panel-title">Saved Prompts</h2>
+            <span id="prompt-count" class="prompt-count">0 prompts</span>
+          </div>
+          <div class="panel-list-header-right">
+            <button type="button" id="export-prompts" class="btn btn-ghost">Export</button>
+            <button type="button" id="import-prompts" class="btn btn-ghost">Import</button>
+            <input id="import-file-input" type="file" accept="application/json" hidden />
+          </div>
         </div>
         <div id="prompt-list" class="prompt-list" aria-live="polite"></div>
       </section>
